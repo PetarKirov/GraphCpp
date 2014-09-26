@@ -1,4 +1,4 @@
-//Compile with -std=c++14
+//Compile with -std=c++1y
 #include <cassert>
 #include <iostream>
 #include <algorithm>
@@ -11,6 +11,7 @@
 #include <set>
 #include <string>
 #include <utility>
+#include <limits>
 #include <type_traits>
 
 template<typename T>
@@ -33,7 +34,7 @@ public:
 	//typedef T value_type;
 	typedef int value_type;
 	typedef value_type& reference;
-	typedef const reference const_reference;
+	typedef const value_type& const_reference;
 	typedef value_type* iterator;
 	typedef const iterator const_iterator;
 	typedef size_t size_type;
@@ -47,7 +48,7 @@ public:
 	{
 		assert(n_ > 1);
 
-		std::fill_n(data, n * n, value_type{});
+		std::fill(begin(), end(), value_type{});
 	}
 
 	// Construct from literal, e.g. Matrix{ 0, 1, 2, 3 }, where rows==cols==2
@@ -62,7 +63,7 @@ public:
 		this->data = new value_type[N * N];
 		this->n = N;
 
-		std::copy_n(l.begin(), l.size(), data);
+		std::copy(l.begin(), l.end(), begin());
 	}
 
 	Matrix(Matrix const& other) { this->copy(other); }
@@ -102,8 +103,8 @@ public:
 	void free() noexcept { free_impl(); }
 
 private:
-	value_type* data = nullptr;
 	size_type n = 0;
+	value_type* data = nullptr;
 
 	reference get(size_type row, size_type col) { return data[n * row + col]; }
 
@@ -163,16 +164,16 @@ void testMatrix()
 
 	for (size_t i = 0; i != m5x5.rows(); i++)
 		for (size_t j = 0; j != m5x5.cols(); j++)
-			assert(m5x5(i, j) == 10 * (i + 1) + (j + 1));
+			assert((size_t)m5x5(i, j) == 10 * (i + 1) + (j + 1));
 
 	// test std <algorithm>
-	int n = 0;
+	int n = -1;
 	std::generate(m5x5.begin(), m5x5.end(),
-		[&]() { return n / m5x5.cols() * 10 + n++ % m5x5.cols(); });
+		[&]() { n++; return n / m5x5.cols() * 10 + n % m5x5.cols(); });
 
 	for (size_t i = 0; i != m5x5.rows(); i++)
 		for (size_t j = 0; j != m5x5.cols(); j++)
-			assert(m5x5(i, j) == 10 * i + j);
+			assert((size_t)m5x5(i, j) == 10 * i + j);
 
 	// Test sequence constructor
 	auto l = { 0, 1, 2, 3 };
@@ -187,16 +188,27 @@ template<class T, bool directed>
 class Graph
 {
 public:
-	using M					= Matrix;
-	using size_type			= M::size_type;
-	using Vertex			= T;
+	using M = Matrix;
+	using size_type = typename M::size_type;
+	using edge_value_type = typename M::value_type;
+	using Vertex = T;
 
-	using Edge				= struct E_ { const Vertex& i; const Vertex& j; bool operator<(const E_& lhs) const; };
-	using WeightedEdge		= struct WE_ { Edge e; int weight; bool operator<(const WE_& lhs) const; };	
+	using Edge = struct E_ {
+		const Vertex& i;
+		const Vertex& j;
+		bool operator<(const E_& lhs) const;
+	};
 
-	using WeightFunc		= std::function<int(Edge)>;
-	using Path				= std::vector<Vertex>;
-	using PathOfIndexes		= std::vector<size_type>;
+	using WeightedEdge = struct WE_ {
+		const Vertex& i;
+		const Vertex& j;
+		edge_value_type weight;
+		bool operator<(const WE_& lhs) const;
+	};
+
+	using WeightFunc = std::function<edge_value_type(Edge)>;
+	using Path = std::vector<Vertex>;
+	using IndexPath = std::vector<size_type>;
 
 	// Constructors taking std::initializer_list
 	Graph(Seq<Vertex> vertices_, Seq<WeightedEdge> weightedEdges_)
@@ -208,7 +220,7 @@ public:
 	Graph(Seq<Vertex> vertices_, Seq<Edge> edges_, WeightFunc func)
 	{
 		fillVertices(vertices_.begin(), vertices_.end(), false);
-		fillWeights(edges_.begin(), edges_.end(), w);
+		fillWeights(edges_.begin(), edges_.end(), func);
 	}
 
 	// Constructors taking std::set
@@ -221,7 +233,7 @@ public:
 	Graph(const Set<Vertex>& vertices_, const Set<Edge>& edges_, WeightFunc func)
 	{
 		fillVertices(vertices_.begin(), vertices_.end(), true);
-		fillWeights(edges_.begin(), edges_.end(), w);
+		fillWeights(edges_.begin(), edges_.end(), func);
 	}
 
 	// Get internal representation
@@ -254,7 +266,7 @@ public:
 			indexOf(e.second));
 	}
 
-	PathOfIndexes toIndexPath(Path path)
+	IndexPath toIndexPath(Path path)
 	{
 		using namespace std;
 		auto result = vector<size_type>(path.size());
@@ -264,19 +276,33 @@ public:
 		return result;
 	}
 
-	void printNeighbours()
+	void print_neighbours() const
 	{
 		using namespace std;
-		for (const auto& v : vertices)
+
+		for_each_vertex([this](const Vertex& v, size_type idx)
 		{
 			cout << endl << v << ": ";
-			auto i = getIndex(v);
-			for (size_t j = 0; j < A.cols(); j++)
-				if (A(i, j) > 0)
-					cout << endl << "-> " << getVertex(j) << ": " << A(i, j) << "km";
-		}
+			for_each_neighbour(idx, [this](size_type vidx, size_type j)
+			{
+				cout << endl << "-> " << getVertex(j) << ": " << A(vidx, j) << "km";
+			});
+		});
 	}
-	
+
+	void for_each_neighbour(size_type vindex, std::function<void(size_type, size_type)> f) const
+	{
+		for (size_t j = 0; j < A.cols(); j++)
+			if (A(vindex, j) > 0)
+				f(vindex, j);
+	}
+
+	void for_each_vertex(std::function<void(const Vertex&, size_type)> f) const
+	{
+		for (size_t i = 0; i != vertices.size() - 1; i++)
+			f(vertices[i], i);
+	}
+
 private:
 	Matrix A; // Adjacency matrix
 	std::vector<Vertex> vertices;
@@ -300,8 +326,8 @@ private:
 	{
 		std::for_each(begin, end, [this](const WeightedEdge& we)
 		{
-			size_type i = getIndex(we.e.i);
-			size_type j = getIndex(we.e.j);
+			size_type i = getIndex(we.i);
+			size_type j = getIndex(we.j);
 			size_type weight = we.weight;
 
 			A(i, j) = weight;
@@ -313,7 +339,7 @@ private:
 	template<typename Iterator>
 	void fillWeights(Iterator begin, Iterator end, WeightFunc w)
 	{
-		std::for_each(begin, end, [this](const Edge& e)
+		std::for_each(begin, end, [this, &w](const Edge& e)
 		{
 			size_type i = getIndex(e.i);
 			size_type j = getIndex(e.j);
@@ -335,27 +361,28 @@ bool Graph<T, d>::Edge::operator<(const Edge& lhs) const
 template<class T, bool d>
 bool Graph<T, d>::WeightedEdge::operator<(const WeightedEdge& lhs) const
 {
-	return e.i < lhs.e.i ? true :
-		e.j < lhs.e.j ? true :
+	return i < lhs.i ? true :
+		j < lhs.j ? true :
 		weight < lhs.weight;
 }
 
 template<typename T, bool directed>
 struct Traverser
 {
-	using G				= Graph<T, directed>;
+	using G = Graph<T, directed>;
 	using M = typename G::M;
-	using size_type		= typename Graph<T, directed>::size_type;
-	using Vertex		= typename G::Vertex;
-	using Path			= typename G::Path;
-	using IndexPath		= typename G::Path;
-	using Depth			= struct { const Vertex& vertex; size_type level; };
-	using DepthI		= struct { size_type idx; size_type level; };
-	using VisitFunc		= std::function<void(Depth)>;
+	using size_type = typename Graph<T, directed>::size_type;
+	using edge_value_type = typename G::edge_value_type;
+	using Vertex = typename G::Vertex;
+	using Path = typename G::Path;
+	using IndexPath = typename G::IndexPath;
+	using Depth = struct { const Vertex& vertex; size_type level; };
+	using DepthI = struct { size_type idx; size_type level; };
+	using VisitFunc = std::function<void(Depth)>;
 	enum class Traversal { DepthFirst, BreadthFirst };
 
 	Traverser(const G& graph_)
-		: graph(graph_), A(graph.getAdjacencyMatrix()) { }
+		: graph(graph_), A(graph.getAdjacencyMatrix()), visited(A.rows(), false) { }
 
 	void BFS(Vertex start, VisitFunc visitor)
 	{
@@ -368,6 +395,55 @@ struct Traverser
 	}
 
 
+	IndexPath shortestPath(Vertex start, Vertex end)
+	{
+		const auto s = graph.getIndex(start);
+		const auto e = graph.getIndex(end);
+		const auto inf_dist = std::numeric_limits<edge_value_type>::max();
+		const auto null_parent = std::numeric_limits<size_type>::max();
+		struct VD {
+			size_type vertex;
+			edge_value_type distance;
+			bool operator< (const VD& other) const
+			{
+				return distance < other.distance;
+			}
+		};
+
+		auto queue = std::priority_queue<VD>();
+		auto dist = std::vector<edge_value_type>(A.rows());
+		auto path = IndexPath(A.rows());
+
+		for (size_type i = 0; i != A.rows(); ++i)
+		{
+			dist[i] = inf_dist;
+			path[i] = null_parent;
+		}
+
+		dist[s] = 0;
+		queue.push({ s, dist[s] });
+
+		while (!queue.empty())
+		{
+			auto closest = queue.top(); queue.pop();
+
+			if (closest.distance == inf_dist) break;
+
+			graph.for_each_neighbour(closest.vertex, [closest, this, &queue](size_type c, size_type j)
+			{
+				VD neighbor = { j, A(closest.vertex, j) };
+				auto potDistance = closest.distance + neighbor.distance;
+				if (potDistance < neighbor.distance)
+				{
+					neighbor.distance = potDistance;
+					queue.push(neighbor);
+				}
+			});
+		}
+
+
+		return path;
+	}
 
 private:
 	const G& graph;
@@ -380,7 +456,7 @@ private:
 		using Cont = std::conditional_t<
 			traversal == Traversal::BreadthFirst,
 			std::queue<DepthI>,
-			std::stack<DepthI >>;
+			std::stack<DepthI >> ;
 
 		auto cont = Cont{};
 		visited = std::vector<bool>(A.rows());
@@ -402,8 +478,6 @@ private:
 					cont.push({ col, v.level + 1 });
 		}
 	}
-
-
 };
 
 template<typename T, bool directed>
@@ -433,10 +507,10 @@ void testGraph()
 	{
 		"Sofia"s, "Pernik"s, "Vraza"s, "Lovech"s,
 		"Pleven"s, "Pazardjik"s, "Plovdiv"s, "Stara Zagora"s,
-		"Burgas"s, "Varna"s, "Dobrich"s, "Shumen"s, 
+		"Burgas"s, "Varna"s, "Dobrich"s, "Shumen"s,
 		"Razgrad"s, "Ruse"s, "Targovishte"s, "Veliko Tarnovo"s,
 		"Gabrovo"s,
-		
+
 	},
 	{
 		{ "Sofia"s, "Pernik"s, 34 },
@@ -461,33 +535,36 @@ void testGraph()
 		{ "Veliko Tarnovo"s, "Lovech"s, 84 },
 	});
 
-	auto p = g2.toIndexPath({ "Ruse"s, "Sofia"s, "Burgas"s, "Pleven"s, "Varna"s });
+		auto p = g2.toIndexPath({ "Ruse"s, "Sofia"s, "Burgas"s, "Pleven"s, "Varna"s });
 
-	for (const auto& i : p)
-		cout << i << " ";
+		for (const auto& i : p)
+			cout << i << " ";
 
-	cout << endl;
+		cout << endl;
 
-	auto t = get(g2);
-	t.BFS("Sofia"s,
-		[] (decltype(t)::Depth d)
-	{
-		cout << string(d.level, ' ') << d.level << ": " << d.vertex << endl;
-	});
+		auto t = get(g2);
+		t.BFS("Sofia"s,
+			[](decltype(t)::Depth d)
+		{
+			cout << string(d.level, ' ') << d.level << ": " << d.vertex << endl;
+		});
 
-	cout << endl;
+		cout << endl;
 
-	t.DFS("Sofia"s,
-		[](decltype(t)::Depth d)
-	{
-		cout << string(d.level, ' ') << d.level << ": " << d.vertex << endl;
-	});
+		t.DFS("Sofia"s,
+			[](decltype(t)::Depth d)
+		{
+			cout << string(d.level, ' ') << d.level << ": " << d.vertex << endl;
+		});
 
-	g2.printNeighbours();
+		g2.print_neighbours();
 
-	cout << endl;
+		cout << endl;
 
+		auto path = t.shortestPath("Sofia", "Dobrich");
 
+		for (auto x : path)
+			cout << x << " ";
 }
 
 
@@ -511,7 +588,7 @@ using Set = typename std::conditional_t<
 	IsPair<E>::value,
 	std::set<E>, pairhash>,
 	std::set<E>
-	>;
+			>;
 
 struct pairhash
 {
@@ -535,4 +612,3 @@ public:
 };
 
 #endif
-
