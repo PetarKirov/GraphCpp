@@ -42,7 +42,7 @@ public:
 	// Construct empty matrix
 	Matrix() noexcept { }
 
-	// Allocate memory for n^2 elements, n should be > 1. Uninitialized.
+	// Allocate memory for n^2 elements, n should be > 1.
 	Matrix(size_type n_)
 		: n{ n_ }, data{ new value_type[n_ * n_] }
 	{
@@ -196,14 +196,21 @@ public:
 	using Edge = struct E_ {
 		const Vertex& i;
 		const Vertex& j;
-		bool operator<(const E_& lhs) const;
+		bool operator<(const E_& lhs) const {
+			return i < lhs.i ? true :
+			j < lhs.j;
+		}
 	};
 
 	using WeightedEdge = struct WE_ {
 		const Vertex& i;
 		const Vertex& j;
 		edge_value_type weight;
-		bool operator<(const WE_& lhs) const;
+		bool operator<(const WE_& lhs) const {
+			return i < lhs.i ? true :
+			j < lhs.j ? true :
+			weight < lhs.weight;
+		}
 	};
 
 	using WeightFunc = std::function<edge_value_type(Edge)>;
@@ -241,19 +248,20 @@ public:
 
 	const std::vector<Vertex>& getVertices() const { return vertices; }
 
-	// Translate Vertex <-> size_type
+	// Translate Vertex <-> size_type. O(log(n)), n is the number of vertices
 	size_type getIndex(const Vertex& v) const
 	{
 		return std::distance(vertices.begin(),
 			std::lower_bound(vertices.begin(), vertices.end(), v));
 	}
 
+	// Gets the vertex with index idx in the adjeacency matrix. O(1)
 	const Vertex& getVertex(size_type idx) const
 	{
 		return vertices[idx];
 	}
 
-	// Get/Set weight for particular edge
+	// Get/Set weight for particular edge. O(1)
 	int& operator[](Edge e)
 	{
 		return A(indexOf(e.first),
@@ -266,6 +274,7 @@ public:
 			indexOf(e.second));
 	}
 
+	// Translates the path to indexes for faster iteration. O(n*log(n))
 	IndexPath toIndexPath(Path path)
 	{
 		using namespace std;
@@ -276,6 +285,7 @@ public:
 		return result;
 	}
 
+	// Prints the neighbours of each vertex. O(n^2), n is the nubmer of vertices
 	void print_neighbours() const
 	{
 		using namespace std;
@@ -283,20 +293,23 @@ public:
 		for_each_vertex([this](const Vertex& v, size_type idx)
 		{
 			cout << endl << v << ": ";
-			for_each_neighbour(idx, [this](size_type vidx, size_type j)
+			for_each_neighbour(idx, [this, idx](size_type j)
 			{
-				cout << endl << "-> " << getVertex(j) << ": " << A(vidx, j) << "km";
+				cout << endl << "-> " << getVertex(j) << ": " << A(idx, j) << "km";
 			});
 		});
 	}
 
-	void for_each_neighbour(size_type vindex, std::function<void(size_type, size_type)> f) const
+	// Executes the function f for each neighbour of the
+	// vertex with index vindex. O(n), n is the number of vertices.
+	void for_each_neighbour(size_type vindex, std::function<void(size_type)> f) const
 	{
 		for (size_t j = 0; j < A.cols(); j++)
 			if (A(vindex, j) > 0)
-				f(vindex, j);
+				f(j);
 	}
 
+	// Executes the function f for with each vertex. O(n), n is the number of vertices.
 	void for_each_vertex(std::function<void(const Vertex&, size_type)> f) const
 	{
 		for (size_t i = 0; i != vertices.size() - 1; i++)
@@ -304,7 +317,10 @@ public:
 	}
 
 private:
-	Matrix A; // Adjacency matrix
+	// Adjacency matrix
+	Matrix A;
+	// Sorted vector represents the mapping from
+	// Vertex type to index in the matrix A
 	std::vector<Vertex> vertices;
 
 	template<typename Iterator>
@@ -351,21 +367,6 @@ private:
 	}
 };
 
-template<class T, bool d>
-bool Graph<T, d>::Edge::operator<(const Edge& lhs) const
-{
-	return i < lhs.i ? true :
-		j < lhs.j;
-}
-
-template<class T, bool d>
-bool Graph<T, d>::WeightedEdge::operator<(const WeightedEdge& lhs) const
-{
-	return i < lhs.i ? true :
-		j < lhs.j ? true :
-		weight < lhs.weight;
-}
-
 template<typename T, bool directed>
 struct Traverser
 {
@@ -399,50 +400,48 @@ struct Traverser
 	{
 		const auto s = graph.getIndex(start);
 		const auto e = graph.getIndex(end);
-		const auto inf_dist = std::numeric_limits<edge_value_type>::max();
+		const auto inf_distance = std::numeric_limits<edge_value_type>::max();
 		const auto null_parent = std::numeric_limits<size_type>::max();
 		struct VD {
-			size_type vertex;
-			edge_value_type distance;
+			size_type idx;
+			edge_value_type dist;
 			bool operator< (const VD& other) const
 			{
-				return distance < other.distance;
+				return dist < other.dist;
 			}
 		};
 
 		auto queue = std::priority_queue<VD>();
-		auto dist = std::vector<edge_value_type>(A.rows());
-		auto path = IndexPath(A.rows());
+		auto previous = IndexPath(A.rows());
 
 		for (size_type i = 0; i != A.rows(); ++i)
 		{
-			dist[i] = inf_dist;
-			path[i] = null_parent;
+			previous[i] = null_parent;
 		}
 
-		dist[s] = 0;
-		queue.push({ s, dist[s] });
+		queue.push({ s, 0 });
 
 		while (!queue.empty())
 		{
-			auto closest = queue.top(); queue.pop();
+			auto current = queue.top(); queue.pop();
 
-			if (closest.distance == inf_dist) break;
+			if (current.dist == inf_distance) break;
 
-			graph.for_each_neighbour(closest.vertex, [closest, this, &queue](size_type c, size_type j)
+			graph.for_each_neighbour(current.idx, [&](size_type j)
 			{
-				VD neighbor = { j, A(closest.vertex, j) };
-				auto potDistance = closest.distance + neighbor.distance;
-				if (potDistance < neighbor.distance)
+				VD neighbour = { j, A(j, current.idx) };
+				auto altDist = current.dist + neighbour.dist;
+				if (altDist < neighbour.dist)
 				{
-					neighbor.distance = potDistance;
-					queue.push(neighbor);
+					neighbour.dist = altDist;
+					previous[neighbour.idx] = current.idx;
+					queue.push(neighbour);
 				}
 			});
 		}
 
 
-		return path;
+		return previous;
 	}
 
 private:
@@ -456,7 +455,7 @@ private:
 		using Cont = std::conditional_t<
 			traversal == Traversal::BreadthFirst,
 			std::queue<DepthI>,
-			std::stack<DepthI >> ;
+			std::stack<DepthI >>;
 
 		auto cont = Cont{};
 		visited = std::vector<bool>(A.rows());
@@ -566,8 +565,6 @@ void testGraph()
 		for (auto x : path)
 			cout << x << " ";
 }
-
-
 
 
 int main()
